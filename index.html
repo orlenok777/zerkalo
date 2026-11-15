@@ -120,7 +120,7 @@
 <body>
 
 <h1>🪞 Зеркало 2.0</h1>
-<p class="sub">478 точек лица · 52 мышцы · поза · руки · предметы · вода · активность · голос<br>Версия 2.2 · 15.11.2026 14:05 · пред. 2.1 · 15.11.2026</p>
+<p class="sub">478 точек лица · 52 мышцы · поза · руки · предметы · вода · активность · голос<br>Версия 2.3 · 15.11.2026 19:30 · пред. 2.2 · 15.11.2026</p>
 
 <div class="stage" id="stage">
   <video id="video" class="mirrored" autoplay muted playsinline></video>
@@ -170,6 +170,7 @@
   <button class="sec" id="tTrainer">😁 Тренажёр</button>
   <button class="sec" id="tCam">🔄 Камера</button>
   <button class="sec" id="tCalib">🎛 Калибровка</button>
+  <button class="sec" id="tDrink">💧 +стакан</button>
   <button class="sec" id="tReport">📄 Отчёт</button>
 </div>
 
@@ -471,7 +472,7 @@ let moveBuf=[], lastPosePts=null;
 let chipSets={pose:[],obj:[]};
 let handLandmarker=null, lastHandTime=0, handNearMouth=false, mouthPt=null;
 let lastVesselSeenAt=0, vesselKind='', handMouthMs=0;
-let faceAppearedAt=0, slouchStreak=0, baselineUntil=0;
+let faceAppearedAt=0, slouchStreak=0, baselineUntil=0, faceWn=0;
 function renderChips(){ poseChip.innerHTML = [...chipSets.pose, ...chipSets.obj].map(c=>'<span>'+c+'</span>').join(''); }
 
 /* ============ Детектор предметов ============ */
@@ -491,7 +492,7 @@ function handleObjects(od, nowMs){
     chips.push('🔎 ' + RU_OBJ[name]);
     const bb = d.boundingBox;
     const cx=(bb.originX+bb.width/2)/W, cy=(bb.originY+bb.height/2)/H;
-    const nearFace = lastFaceC ? Math.hypot(cx-lastFaceC.x, cy-lastFaceC.y) < 0.38 : cy < 0.6;
+    const nearFace = lastFaceC ? Math.hypot(cx-lastFaceC.x, cy-lastFaceC.y) < 0.46 : cy < 0.6;
     if (name==='cup'||name==='bottle'||name==='wine glass'){
       lastVesselSeenAt = nowMs; vesselKind = RU_OBJ[name];
       if (nearFace) drinkSeen = true;
@@ -510,6 +511,7 @@ function handleObjects(od, nowMs){
       fireEvent('phone','Вы в телефоне. Не забывайте отдыхать от маленького экрана!','📱 Телефон в руках');
     }
   } else phoneMs = 0;
+  if (drinkCandidateMs > 0 || handMouthMs > 0) chips.unshift('💧 похоже, пьёте…');
   chipSets.obj = chips.slice(0,3);
   renderChips();
 }
@@ -526,14 +528,15 @@ function handleHands(hr, nowMs){
   handNearMouth = false;
   if (hr && hr.landmarks){
     for (const hand of hr.landmarks){
-      for (const i of [4,8,12]){
+      const rad = Math.max(0.09, faceWn*0.28);
+      for (const i of [4,8,12,16,20]){
         const t = hand[i];
-        if (mouthPt && Math.hypot(t.x-mouthPt.x, t.y-mouthPt.y) < 0.09){ handNearMouth = true; break; }
+        if (mouthPt && Math.hypot(t.x-mouthPt.x, t.y-mouthPt.y) < rad){ handNearMouth = true; break; }
       }
       if (handNearMouth) break;
     }
   }
-  if (handNearMouth && facePresent && nowMs - lastVesselSeenAt < 6000){
+  if (handNearMouth && facePresent && nowMs - lastVesselSeenAt < 12000){
     handMouthMs += 450;
     if (handMouthMs >= 900) countDrink(nowMs, vesselKind ? vesselKind+' у губ' : 'рука у губ');
   } else handMouthMs = Math.max(0, handMouthMs - 225);
@@ -685,6 +688,7 @@ function loop(){
   const g = faceGeom(lms);
   lastFaceC = {x:g.cx, y:g.cy};
   mouthPt = {x:lms[13].x, y:lms[13].y};
+  faceWn = g.w;
 
   if (calibrating){ feedCalibration(bs, g, poseState.shY!==null ? poseState : null); return; }
   if (!calib){ startCalibration(); return; }
@@ -904,6 +908,13 @@ $('tCam').onclick = async function(){
 $('tCalib').onclick = function(){
   if (running){ startCalibration(); }
   else addLog('🎛 Калибровка: сначала нажмите «Начать»');
+};
+$('tDrink').onclick = function(){
+  if (!running){ addLog('💧 Сначала нажмите «Начать»'); return; }
+  waterMl += 200; drinkCount++;
+  $('sWater').textContent = waterMl + ' мл';
+  addLog('💧 Стакан добавлен вручную (всего '+waterMl+' мл)');
+  speak('Записала стакан воды. Всего '+waterMl+' миллилитров.');
 };
 $('tReport').onclick = downloadReport;
 
