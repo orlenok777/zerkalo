@@ -120,7 +120,7 @@
 <body>
 
 <h1>🪞 Зеркало 2.0</h1>
-<p class="sub">478 точек лица · 52 мышцы · поза · предметы в руках · вода · активность · голос<br>Версия 2.1 · 15.11.2026 13:15 · пред. 2.0 · 15.11.2026</p>
+<p class="sub">478 точек лица · 52 мышцы · поза · руки · предметы · вода · активность · голос<br>Версия 2.2 · 15.11.2026 14:05 · пред. 2.1 · 15.11.2026</p>
 
 <div class="stage" id="stage">
   <video id="video" class="mirrored" autoplay muted playsinline></video>
@@ -169,6 +169,7 @@
   <button class="sec" id="tMesh">🕸 Сетка</button>
   <button class="sec" id="tTrainer">😁 Тренажёр</button>
   <button class="sec" id="tCam">🔄 Камера</button>
+  <button class="sec" id="tCalib">🎛 Калибровка</button>
   <button class="sec" id="tReport">📄 Отчёт</button>
 </div>
 
@@ -181,7 +182,7 @@
 
 <script src="vendor/face-api.min.js"></script>
 <script type="module">
-import { FilesetResolver, FaceLandmarker, PoseLandmarker, ObjectDetector, DrawingUtils } from './vendor/vision_bundle.js';
+import { FilesetResolver, FaceLandmarker, PoseLandmarker, ObjectDetector, HandLandmarker, DrawingUtils } from './vendor/vision_bundle.js';
 
 /* ============ DOM ============ */
 const $ = id => document.getElementById(id);
@@ -278,6 +279,7 @@ async function loadEngines(){
     faceLandmarker = await FaceLandmarker.createFromOptions(fileset, {
       baseOptions:{ modelAssetPath:'./models/face_landmarker.task', delegate:'GPU' },
       runningMode:'VIDEO', numFaces:2,
+      minFaceDetectionConfidence:0.3, minFacePresenceConfidence:0.3, minTrackingConfidence:0.3,
       outputFaceBlendshapes:true, outputFacialTransformationMatrixes:false
     });
   } catch(e){
@@ -285,6 +287,7 @@ async function loadEngines(){
     faceLandmarker = await FaceLandmarker.createFromOptions(fileset, {
       baseOptions:{ modelAssetPath:'./models/face_landmarker.task', delegate:'CPU' },
       runningMode:'VIDEO', numFaces:2,
+      minFaceDetectionConfidence:0.3, minFacePresenceConfidence:0.3, minTrackingConfidence:0.3,
       outputFaceBlendshapes:true, outputFacialTransformationMatrixes:false
     });
   }
@@ -306,15 +309,29 @@ async function loadEngines(){
   try {
     objectDetector = await ObjectDetector.createFromOptions(fileset, {
       baseOptions:{ modelAssetPath:'./models/efficientdet_lite0.tflite', delegate:'GPU' },
-      runningMode:'VIDEO', scoreThreshold:0.4, maxResults:5
+      runningMode:'VIDEO', scoreThreshold:0.32, maxResults:5
     });
   } catch(e){
     try {
       objectDetector = await ObjectDetector.createFromOptions(fileset, {
         baseOptions:{ modelAssetPath:'./models/efficientdet_lite0.tflite', delegate:'CPU' },
-        runningMode:'VIDEO', scoreThreshold:0.4, maxResults:5
+        runningMode:'VIDEO', scoreThreshold:0.32, maxResults:5
       });
     } catch(e2){ console.warn('Детектор предметов недоступен', e2); objectDetector = null; }
+  }
+  loading.textContent = 'Подключаю распознавание рук…';
+  try {
+    handLandmarker = await HandLandmarker.createFromOptions(fileset, {
+      baseOptions:{ modelAssetPath:'./models/hand_landmarker.task', delegate:'GPU' },
+      runningMode:'VIDEO', numHands:2
+    });
+  } catch(e){
+    try {
+      handLandmarker = await HandLandmarker.createFromOptions(fileset, {
+        baseOptions:{ modelAssetPath:'./models/hand_landmarker.task', delegate:'CPU' },
+        runningMode:'VIDEO', numHands:2
+      });
+    } catch(e2){ console.warn('Руки недоступны', e2); handLandmarker = null; }
   }
   loading.textContent = '';
 }
@@ -380,6 +397,10 @@ function feedCalibration(bs, g, poseData){
     calib = { smile:avg('smile'), frown:avg('frown'), browDown:avg('browDown'), browUp:avg('browUp'),
       jaw:avg('jaw'), pitchRatio:avg('pitchRatio'), roll:avg('roll'), yaw:avg('yaw'),
       w:avg('w'), cy:avg('cy'), shY:avg('shY'), headDrop:avg('headDrop') };
+    const poseN = calibBuf.filter(o=>o.headDrop!==null).length;
+    if (poseN < 8){ calib.headDrop = null; calib.shY = null; }
+    baselineUntil = performance.now() + 30000;
+    slouchStreak = 0;
     calibrating = false;
     calibVeil.style.display = 'none';
     addLog('✅ Калибровка завершена — пороги настроены под вас');
@@ -448,6 +469,9 @@ let objectDetector=null, lastObjTime=0, lastFaceC=null;
 let waterMl=0, drinkCount=0, drinkCandidateMs=0, lastDrinkAt=0, phoneMs=0;
 let moveBuf=[], lastPosePts=null;
 let chipSets={pose:[],obj:[]};
+let handLandmarker=null, lastHandTime=0, handNearMouth=false, mouthPt=null;
+let lastVesselSeenAt=0, vesselKind='', handMouthMs=0;
+let faceAppearedAt=0, slouchStreak=0, baselineUntil=0;
 function renderChips(){ poseChip.innerHTML = [...chipSets.pose, ...chipSets.obj].map(c=>'<span>'+c+'</span>').join(''); }
 
 /* ============ Детектор предметов ============ */
@@ -461,31 +485,28 @@ function handleObjects(od, nowMs){
   let drinkSeen=false, phoneSeen=false;
   const W = video.videoWidth || 1, H = video.videoHeight || 1;
   for (const d of dets){
-    const c = d.categories && d.categories[0]; if (!c || c.score < 0.4) continue;
+    const c = d.categories && d.categories[0]; if (!c || c.score < 0.35) continue;
     const name = c.categoryName;
     if (!(name in RU_OBJ)) continue;
     chips.push('🔎 ' + RU_OBJ[name]);
     const bb = d.boundingBox;
     const cx=(bb.originX+bb.width/2)/W, cy=(bb.originY+bb.height/2)/H;
     const nearFace = lastFaceC ? Math.hypot(cx-lastFaceC.x, cy-lastFaceC.y) < 0.38 : cy < 0.6;
-    if ((name==='cup'||name==='bottle'||name==='wine glass') && nearFace) drinkSeen = true;
+    if (name==='cup'||name==='bottle'||name==='wine glass'){
+      lastVesselSeenAt = nowMs; vesselKind = RU_OBJ[name];
+      if (nearFace) drinkSeen = true;
+    }
     if (name==='cell phone') phoneSeen = true;
     if (FOOD.includes(name))
       fireEvent('eat','Приятного аппетита! Вижу у вас '+RU_OBJ[name]+'.','🍽 Еда в кадре: '+RU_OBJ[name]);
   }
   if (drinkSeen){
-    drinkCandidateMs += 900;
-    if (drinkCandidateMs >= 1800 && nowMs - lastDrinkAt > 90000){
-      lastDrinkAt = nowMs; drinkCandidateMs = 0;
-      waterMl += 150; drinkCount++;
-      $('sWater').textContent = waterMl + ' мл';
-      fireEvent('drink','Молодец! По всей видимости, вы попили воды. Записываю примерно сто пятьдесят миллилитров.',
-        '💧 Питьё: +150 мл (всего '+waterMl+' мл)', true);
-    }
-  } else { drinkCandidateMs = Math.max(0, drinkCandidateMs - 450); }
+    drinkCandidateMs += 700;
+    if (drinkCandidateMs >= 1400) countDrink(nowMs, vesselKind || 'сосуд у лица');
+  } else { drinkCandidateMs = Math.max(0, drinkCandidateMs - 350); }
   if (phoneSeen){
-    phoneMs += 900;
-    if (phoneMs > 2700){ phoneMs = 0;
+    phoneMs += 700;
+    if (phoneMs > 2100){ phoneMs = 0;
       fireEvent('phone','Вы в телефоне. Не забывайте отдыхать от маленького экрана!','📱 Телефон в руках');
     }
   } else phoneMs = 0;
@@ -493,9 +514,35 @@ function handleObjects(od, nowMs){
   renderChips();
 }
 
+function countDrink(nowMs, how){
+  if (nowMs - lastDrinkAt < 60000) return;
+  lastDrinkAt = nowMs; drinkCandidateMs = 0; handMouthMs = 0;
+  waterMl += 200; drinkCount++;
+  $('sWater').textContent = waterMl + ' мл';
+  fireEvent('drink','Молодец! По всей видимости, вы попили воды. Засчитываю примерно стакан — двести миллилитров.',
+    '💧 Питьё ('+how+'): +200 мл (всего '+waterMl+' мл)', true);
+}
+function handleHands(hr, nowMs){
+  handNearMouth = false;
+  if (hr && hr.landmarks){
+    for (const hand of hr.landmarks){
+      for (const i of [4,8,12]){
+        const t = hand[i];
+        if (mouthPt && Math.hypot(t.x-mouthPt.x, t.y-mouthPt.y) < 0.09){ handNearMouth = true; break; }
+      }
+      if (handNearMouth) break;
+    }
+  }
+  if (handNearMouth && facePresent && nowMs - lastVesselSeenAt < 6000){
+    handMouthMs += 450;
+    if (handMouthMs >= 900) countDrink(nowMs, vesselKind ? vesselKind+' у губ' : 'рука у губ');
+  } else handMouthMs = Math.max(0, handMouthMs - 225);
+}
+
 let poseState = {shY:null, headDrop:null, flags:[]};
 function analyzePose(res, nowMs){
   poseState.flags = [];
+  if (!facePresent || (faceAppearedAt && nowMs - faceAppearedAt < 2500)){ chipSets.pose=[]; renderChips(); return; }
   if (!res || !res.landmarks || !res.landmarks.length){ chipSets.pose=[]; renderChips(); return; }
   const lm = res.landmarks[0];
   const nose=lm[0], shL=lm[11], shR=lm[12], wrL=lm[15], wrR=lm[16];
@@ -527,10 +574,16 @@ function analyzePose(res, nowMs){
 
   const chips=[];
   // сутулость: голова просела к плечам относительно калибровки
-  if (calib && calib.headDrop !== null && headDrop < calib.headDrop*0.72){
-    postureBad = true; chips.push('🧍 сутулость');
-    fireEvent('slouch', pick(['Вы ссутулились! Выпрямите спину и расправьте плечи.',
-      'Спина! Сядьте ровно, плечи назад.']), '🧍 Сутулость: голова просела к плечам');
+  if (calib && calib.headDrop !== null){
+    if (nowMs < baselineUntil && headDrop > calib.headDrop) calib.headDrop = headDrop;
+    if (headDrop < calib.headDrop*0.62){
+      slouchStreak++;
+      if (slouchStreak >= 5){
+        postureBad = true; chips.push('🧍 сутулость');
+        fireEvent('slouch', pick(['Вы ссутулились! Выпрямите спину и расправьте плечи.',
+          'Спина! Сядьте ровно, плечи назад.']), '🧍 Сутулость: голова просела к плечам');
+      }
+    } else { slouchStreak = 0; postureBad = false; }
   } else { postureBad = false; }
   // перекос плеч
   if (shoulderRoll > 9 && shoulderRoll < 80){
@@ -580,9 +633,15 @@ function loop(){
   }
 
   // --- предметы в руках, каждые ~900 мс ---
-  if (objectDetector && nowMs - lastObjTime > 900){
+  if (objectDetector && nowMs - lastObjTime > 700){
     lastObjTime = nowMs;
     try { handleObjects(objectDetector.detectForVideo(video, nowMs+0.02), nowMs); } catch(e){}
+  }
+
+  // --- руки: «поднёс к губам», каждые ~450 мс ---
+  if (handLandmarker && nowMs - lastHandTime > 450){
+    lastHandTime = nowMs;
+    try { handleHands(handLandmarker.detectForVideo(video, nowMs+0.03), nowMs); } catch(e){}
   }
 
   const faces = res.faceLandmarks || [];
@@ -605,7 +664,7 @@ function loop(){
   lastCount = faces.length;
 
   if (!faces.length){
-    if (facePresent && nowMs - lastFaceSeen > 2500){
+    if (facePresent && nowMs - lastFaceSeen > 4000){
       facePresent = false;
       fireEvent('gone','Человек ушёл из кадра.','🚶 Человек ушёл из кадра');
       poseChip.innerHTML='';
@@ -616,6 +675,7 @@ function loop(){
   lastFaceSeen = nowMs;
   if (!facePresent){
     facePresent = true;
+    faceAppearedAt = nowMs;
     if (calib) fireEvent('appeared','С возвращением! Я вас вижу.','👋 Человек вернулся в кадр');
   }
 
@@ -624,6 +684,7 @@ function loop(){
   const bs = smooth(bsRaw);
   const g = faceGeom(lms);
   lastFaceC = {x:g.cx, y:g.cy};
+  mouthPt = {x:lms[13].x, y:lms[13].y};
 
   if (calibrating){ feedCalibration(bs, g, poseState.shY!==null ? poseState : null); return; }
   if (!calib){ startCalibration(); return; }
@@ -840,6 +901,10 @@ $('tCam').onclick = async function(){
   addLog('🔄 Камера: ' + (facingUser?'передняя':'задняя'));
   if (running){ stopCamera(); try{ await startCamera(); }catch(e){ console.error(e); } }
 };
+$('tCalib').onclick = function(){
+  if (running){ startCalibration(); }
+  else addLog('🎛 Калибровка: сначала нажмите «Начать»');
+};
 $('tReport').onclick = downloadReport;
 
 btn.onclick = async () => {
@@ -863,6 +928,7 @@ btn.onclick = async () => {
     perclosBuf=[]; moodBuf=[]; bsSm={}; logEntries=[]; trainerWins=0;
     ageDone=false; ageSamples=[]; genderVotes={male:0,female:0};
     waterMl=0; drinkCount=0; drinkCandidateMs=0; lastDrinkAt=0; phoneMs=0;
+    handMouthMs=0; lastVesselSeenAt=0; slouchStreak=0; faceAppearedAt=0; baselineUntil=0; mouthPt=null;
     moveBuf=[]; lastPosePts=null; chipSets={pose:[],obj:[]};
     $('sWater').textContent='0 мл'; $('sMove').textContent='—';
     calib=null; calibrating=false; facePresent=false; lastVideoTime=-1;
