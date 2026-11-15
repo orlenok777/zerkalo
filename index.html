@@ -1,0 +1,788 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Зеркало 2.0 — видеоаналитика</title>
+<style>
+  :root{
+    --bg:#0c1014; --panel:#161d26; --panel2:#1c2531; --ink:#eef3f7; --dim:#8b98a5;
+    --joy:#ffb937; --sad:#5b8dd6; --angry:#ff6b5b; --surp:#c07bff;
+    --calm:#3ec9a7; --warn:#ffd06b; --ring:#2a333d; --accent:#3ec9a7;
+  }
+  *{margin:0;padding:0;box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+  body{
+    background:radial-gradient(1200px 800px at 50% -10%, #151d26 0%, var(--bg) 60%);
+    color:var(--ink);
+    font-family:'Segoe UI', system-ui, -apple-system, sans-serif;
+    min-height:100vh; display:flex; flex-direction:column; align-items:center;
+    padding:16px 12px calc(40px + env(safe-area-inset-bottom));
+  }
+  h1{font-size:clamp(19px,5vw,28px); font-weight:800; margin-bottom:2px; text-align:center}
+  .sub{color:var(--dim); font-size:12px; margin-bottom:14px; text-align:center}
+
+  .stage{
+    position:relative; width:min(94vw,420px); aspect-ratio:3/4; max-height:56vh;
+    border-radius:22px; overflow:hidden; border:3px solid var(--ring);
+    box-shadow:0 18px 50px rgba(0,0,0,.55); background:#000;
+    transition:border-color .5s ease;
+  }
+  .stage.joy{border-color:var(--joy)} .stage.sad{border-color:var(--sad)}
+  .stage.angry{border-color:var(--angry)} .stage.surp{border-color:var(--surp)}
+  .stage.calm{border-color:var(--calm)} .stage.warn{border-color:var(--warn)}
+  video, #overlay{
+    position:absolute; inset:0; width:100%; height:100%; object-fit:cover;
+  }
+  video.mirrored{transform:scaleX(-1)}
+  #overlay{pointer-events:none}
+  .face-emoji{
+    position:absolute; bottom:10px; right:14px; font-size:42px; z-index:3;
+    filter:drop-shadow(0 4px 8px rgba(0,0,0,.6));
+  }
+  .pose-chip{
+    position:absolute; top:10px; left:12px; z-index:3; display:flex; gap:6px; flex-wrap:wrap; max-width:70%;
+  }
+  .pose-chip span{
+    background:rgba(0,0,0,.55); backdrop-filter:blur(4px); padding:4px 10px;
+    border-radius:999px; font-size:11px; color:#cfe3dd;
+  }
+  .trainer-badge{
+    position:absolute; top:10px; left:50%; transform:translateX(-50%); z-index:4;
+    background:rgba(0,0,0,.7); padding:7px 16px; border-radius:999px;
+    font-size:14px; font-weight:700; display:none; white-space:nowrap;
+  }
+  .calib-veil{
+    position:absolute; inset:0; z-index:5; display:none; align-items:center; justify-content:center;
+    flex-direction:column; gap:10px; background:rgba(5,8,11,.55); backdrop-filter:blur(2px);
+    text-align:center; padding:20px;
+  }
+  .calib-veil b{font-size:18px}
+  .calib-veil .ring{
+    width:64px; height:64px; border-radius:50%; border:4px solid rgba(255,255,255,.15);
+    border-top-color:var(--accent); animation:spin 1s linear infinite;
+  }
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  .status{margin-top:12px; min-height:46px; text-align:center}
+  .emotion-label{font-size:clamp(16px,4.5vw,22px); font-weight:700}
+  .hint{color:var(--dim); font-size:12px; margin-top:3px}
+
+  .meter-row{
+    width:min(94vw,420px); margin-top:10px; background:var(--panel);
+    border-radius:14px; padding:10px 14px;
+  }
+  .meter-row .mr-top{display:flex; justify-content:space-between; font-size:12px; color:var(--dim); margin-bottom:6px}
+  .meter-row .mr-top b{color:var(--ink)}
+  .meter{height:8px; background:#0d1116; border-radius:4px; overflow:hidden}
+  .meter i{display:block; height:100%; width:0%; border-radius:4px;
+    background:linear-gradient(90deg, var(--calm), var(--warn) 55%, var(--angry)); transition:width .5s ease}
+
+  .timeline-box{
+    width:min(94vw,420px); margin-top:10px; background:var(--panel);
+    border-radius:14px; padding:10px 14px;
+  }
+  .timeline-box h3{font-size:11px; color:var(--dim); font-weight:600; text-transform:uppercase; letter-spacing:.5px; margin-bottom:6px}
+  #timeline{width:100%; height:56px; display:block}
+
+  .stats{
+    margin-top:10px; display:grid; grid-template-columns:repeat(4,1fr); gap:6px;
+    width:min(94vw,420px);
+  }
+  .chip{
+    background:var(--panel); border:1px solid #232d39; border-radius:12px;
+    padding:7px 4px; font-size:10px; color:var(--dim); text-align:center;
+  }
+  .chip b{display:block; font-size:15px; color:var(--ink); margin-top:1px}
+
+  .controls{margin-top:14px; display:flex; gap:8px; flex-wrap:wrap; justify-content:center; width:min(94vw,440px)}
+  button{
+    padding:12px 22px; font-size:15px; font-weight:700;
+    color:#0e1216; background:linear-gradient(135deg,#ffd06b,#ffb937);
+    border:none; border-radius:999px; cursor:pointer;
+    box-shadow:0 8px 24px rgba(255,185,55,.25);
+  }
+  button:active{transform:scale(.96)}
+  button.sec{background:var(--panel); color:var(--ink); border:1px solid #2a333d; box-shadow:none; font-weight:600; font-size:13px; padding:10px 14px}
+  button.sec.on{border-color:var(--calm); background:#20303a}
+  button.stop{background:linear-gradient(135deg,#39424c,#2a333d); color:var(--ink); box-shadow:none}
+  button:disabled{opacity:.5}
+
+  .log{
+    margin-top:16px; width:min(94vw,420px); background:var(--panel);
+    border-radius:16px; padding:13px 16px; max-height:230px; overflow-y:auto;
+  }
+  .log h3{font-size:11px; color:var(--dim); font-weight:600; margin-bottom:8px; text-transform:uppercase; letter-spacing:.5px}
+  .log-item{font-size:13px; padding:5px 0; border-bottom:1px solid #222b36; display:flex; gap:8px}
+  .log-item time{color:var(--dim); font-size:11px; flex-shrink:0; padding-top:1px}
+  .loading{color:var(--dim); font-size:12px; margin-top:12px; text-align:center; min-height:16px}
+</style>
+</head>
+<body>
+
+<h1>🪞 Зеркало 2.0</h1>
+<p class="sub">478 точек лица · 52 мышцы · поза тела · взгляд · усталость · голос<br>Версия 2.0 · 15.11.2026</p>
+
+<div class="stage" id="stage">
+  <video id="video" class="mirrored" autoplay muted playsinline></video>
+  <canvas id="overlay"></canvas>
+  <div class="pose-chip" id="poseChip"></div>
+  <div class="face-emoji" id="faceEmoji">🙂</div>
+  <div class="trainer-badge" id="trainerBadge">😁 Держите улыбку!</div>
+  <div class="calib-veil" id="calibVeil">
+    <div class="ring"></div>
+    <b>Калибровка</b>
+    <span id="calibText">Смотрите в камеру с нейтральным лицом…</span>
+  </div>
+</div>
+
+<div class="status">
+  <div class="emotion-label" id="emotionLabel">Нажмите «Начать»</div>
+  <div class="hint" id="hint">Всё считается на устройстве, видео никуда не отправляется</div>
+</div>
+
+<div class="meter-row">
+  <div class="mr-top"><span>Индекс усталости (PERCLOS)</span><b id="fatigueVal">—</b></div>
+  <div class="meter"><i id="fatigueBar"></i></div>
+</div>
+
+<div class="timeline-box">
+  <h3>Лента настроения · последние 2 минуты</h3>
+  <canvas id="timeline"></canvas>
+</div>
+
+<div class="stats">
+  <div class="chip">⏱ Время<b id="sTime">0:00</b></div>
+  <div class="chip">⚡ FPS<b id="sFps">—</b></div>
+  <div class="chip">😄 Улыбок<b id="sSmiles">0</b></div>
+  <div class="chip">👁 Морг/мин<b id="sBlinks">—</b></div>
+  <div class="chip">🎯 Внимание<b id="sAttention">—</b></div>
+  <div class="chip">🧍 Осанка<b id="sPosture">—</b></div>
+  <div class="chip">🏆 Тренажёр<b id="sTrainer">0</b></div>
+  <div class="chip">🎂 Возраст<b id="sAge">—</b></div>
+</div>
+
+<div class="controls">
+  <button id="btn">Начать</button>
+  <button class="sec on" id="tVoice">🔊 Голос</button>
+  <button class="sec" id="tMesh">🕸 Сетка</button>
+  <button class="sec" id="tTrainer">😁 Тренажёр</button>
+  <button class="sec" id="tCam">🔄 Камера</button>
+  <button class="sec" id="tReport">📄 Отчёт</button>
+</div>
+
+<div class="log">
+  <h3>Журнал поведения</h3>
+  <div id="logList"><div class="log-item"><time>—</time><span>Пока пусто</span></div></div>
+</div>
+
+<p class="loading" id="loading"></p>
+
+<script src="vendor/face-api.min.js"></script>
+<script type="module">
+import { FilesetResolver, FaceLandmarker, PoseLandmarker, DrawingUtils } from './vendor/vision_bundle.js';
+
+/* ============ DOM ============ */
+const $ = id => document.getElementById(id);
+const video = $('video'), overlay = $('overlay'), stage = $('stage');
+const btn = $('btn'), label = $('emotionLabel'), hint = $('hint'), loading = $('loading');
+const faceEmoji = $('faceEmoji'), logList = $('logList'), trainerBadge = $('trainerBadge');
+const calibVeil = $('calibVeil'), calibText = $('calibText'), poseChip = $('poseChip');
+const timelineCv = $('timeline');
+
+/* ============ Голос ============ */
+let voiceOn = true, ruVoice = null, lastAnySpeech = 0;
+function pickRuVoice(){
+  const vs = speechSynthesis.getVoices();
+  ruVoice = vs.find(v => /milena/i.test(v.name) && /^ru/i.test(v.lang))
+         || vs.find(v => /^ru/i.test(v.lang)) || null;
+}
+if ('speechSynthesis' in window){ pickRuVoice(); speechSynthesis.onvoiceschanged = pickRuVoice; }
+function speak(text){
+  if (!voiceOn || !('speechSynthesis' in window)) return;
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = 'ru-RU'; if (ruVoice) u.voice = ruVoice; u.rate = 0.97;
+  speechSynthesis.speak(u);
+}
+
+/* ============ Журнал и события ============ */
+let logEntries = [];
+function addLog(text){
+  const t = new Date().toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  logEntries.push(t+'  '+text);
+  const el = document.createElement('div');
+  el.className = 'log-item';
+  el.innerHTML = '<time>'+t+'</time><span>'+text+'</span>';
+  if (logList.firstChild && logList.firstChild.textContent.includes('Пока пусто')) logList.innerHTML='';
+  logList.prepend(el);
+  while (logList.children.length > 80) logList.removeChild(logList.lastChild);
+}
+const lastSaid = {};
+const COOLDOWN = {
+  joySincere:25, joyPolite:25, sad:25, angry:25, surprised:18, disgusted:25, kiss:20,
+  tongue:15, cheeks:20, yawn:30, drowsy:20, dryEyes:50, gazeAway:20, turned:18,
+  tiltHead:25, headDown:30, tooClose:18, tooFar:25, appeared:8, gone:8, twoFaces:25,
+  slouch:40, shoulders:40, handFace:35, handUp:15, fatigueUp:45, breakTime:60,
+  trainerWin:3, trainerFail:10, ageGender:9999
+};
+function fireEvent(type, phrase, logText, force){
+  const now = Date.now();
+  if (lastSaid[type] && now - lastSaid[type] < (COOLDOWN[type]||15)*1000) return;
+  if (!force && now - lastAnySpeech < 3500) return;
+  lastSaid[type] = now; lastAnySpeech = now;
+  addLog(logText || phrase);
+  speak(phrase);
+}
+function pick(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+
+/* ============ Состояние ============ */
+let running=false, facingUser=true, meshOn=false, trainerOn=false;
+let faceLandmarker=null, poseLandmarker=null, drawer=null, octx=null;
+let sessionStart=0, statTimer=null, rafId=0;
+let lastVideoTime=-1, lastPoseTime=0, fpsFrames=0, fpsStamp=0, fps=0;
+
+let facePresent=false, lastFaceSeen=0, lastCount=0;
+let smileCount=0, wasSmiling=false;
+let blinkCount=0, blinkDown=false, lastBlinkAt=0;
+let framesTotal=0, framesAttentive=0;
+let closedStreakMs=0, lastFrameAt=0;
+let yawnMs=0, gazeAwayMs=0;
+let perclosBuf=[]; // {t, closed}
+let fatigueLevel=0;
+let valence=0, moodBuf=[]; let lastMoodPush=0;
+let postureScore=100, postureBad=false;
+let trainerHold=0, trainerWins=0, trainerRestUntil=0;
+let lastBreakReminder=0;
+let ageDone=false, ageSamples=[], genderVotes={male:0,female:0}, ageTimer=null, faDetReady=false;
+
+/* Калибровка */
+let calib=null, calibrating=false, calibBuf=[];
+
+/* Сглаживание blendshapes */
+let bsSm = {};
+function smooth(map){
+  for (const k in map){
+    bsSm[k] = bsSm[k]===undefined ? map[k] : bsSm[k]*0.65 + map[k]*0.35;
+  }
+  return bsSm;
+}
+
+/* ============ Загрузка движков ============ */
+async function loadEngines(){
+  loading.textContent = 'Запускаю нейросети Google MediaPipe…';
+  const fileset = await FilesetResolver.forVisionTasks('./vendor/wasm');
+  try {
+    faceLandmarker = await FaceLandmarker.createFromOptions(fileset, {
+      baseOptions:{ modelAssetPath:'./models/face_landmarker.task', delegate:'GPU' },
+      runningMode:'VIDEO', numFaces:2,
+      outputFaceBlendshapes:true, outputFacialTransformationMatrixes:false
+    });
+  } catch(e){
+    console.warn('GPU не доступен, перехожу на CPU', e);
+    faceLandmarker = await FaceLandmarker.createFromOptions(fileset, {
+      baseOptions:{ modelAssetPath:'./models/face_landmarker.task', delegate:'CPU' },
+      runningMode:'VIDEO', numFaces:2,
+      outputFaceBlendshapes:true, outputFacialTransformationMatrixes:false
+    });
+  }
+  loading.textContent = 'Подключаю анализ позы тела…';
+  try {
+    poseLandmarker = await PoseLandmarker.createFromOptions(fileset, {
+      baseOptions:{ modelAssetPath:'./models/pose_landmarker_lite.task', delegate:'GPU' },
+      runningMode:'VIDEO', numPoses:1
+    });
+  } catch(e){
+    try {
+      poseLandmarker = await PoseLandmarker.createFromOptions(fileset, {
+        baseOptions:{ modelAssetPath:'./models/pose_landmarker_lite.task', delegate:'CPU' },
+        runningMode:'VIDEO', numPoses:1
+      });
+    } catch(e2){ console.warn('Поза недоступна', e2); poseLandmarker = null; }
+  }
+  loading.textContent = '';
+}
+
+/* ============ Камера ============ */
+async function startCamera(){
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video:{ facingMode: facingUser?'user':'environment', width:{ideal:960}, height:{ideal:1280} },
+    audio:false
+  });
+  video.srcObject = stream;
+  video.classList.toggle('mirrored', facingUser);
+  await video.play();
+  overlay.width = video.videoWidth || 720;
+  overlay.height = video.videoHeight || 960;
+  octx = overlay.getContext('2d');
+  drawer = new DrawingUtils(octx);
+}
+function stopCamera(){
+  if (video.srcObject){ video.srcObject.getTracks().forEach(t=>t.stop()); video.srcObject=null; }
+}
+
+/* ============ Утилиты ============ */
+function setUI(cls, emoji, text){
+  stage.className = 'stage' + (cls ? ' '+cls : '');
+  faceEmoji.textContent = emoji; label.textContent = text;
+}
+function fmtTime(ms){ const s=Math.floor(ms/1000); return Math.floor(s/60)+':' + String(s%60).padStart(2,'0'); }
+function toMap(categories){
+  const m={}; for (const c of categories) m[c.categoryName]=c.score; return m;
+}
+function faceGeom(lms){
+  const W = overlay.width, H = overlay.height;
+  const p = i => ({x:lms[i].x*W, y:lms[i].y*H});
+  const eyeR=p(33), eyeL=p(263), nose=p(1), bridge=p(168), chin=p(152), cheekR=p(234), cheekL=p(454);
+  const roll = Math.atan2(eyeL.y-eyeR.y, eyeL.x-eyeR.x)*180/Math.PI;
+  const midX = (cheekR.x+cheekL.x)/2, halfW = Math.abs(cheekL.x-cheekR.x)/2 || 1;
+  const yaw = ((nose.x-midX)/halfW)*55;
+  const pitchRatio = (nose.y-bridge.y)/Math.max(1,(chin.y-bridge.y));
+  let minX=1,maxX=0,minY=1,maxY=0;
+  for (const l of lms){ if(l.x<minX)minX=l.x; if(l.x>maxX)maxX=l.x; if(l.y<minY)minY=l.y; if(l.y>maxY)maxY=l.y; }
+  return { roll, yaw, pitchRatio, w:maxX-minX, cx:(minX+maxX)/2, cy:(minY+maxY)/2 };
+}
+
+/* ============ Калибровка ============ */
+function startCalibration(){
+  calibrating = true; calib = null; calibBuf = [];
+  calibVeil.style.display = 'flex';
+  speak('Калибровка. Смотрите в камеру с нейтральным лицом три секунды.');
+  addLog('🎛 Калибровка под ваше лицо…');
+}
+function feedCalibration(bs, g, poseData){
+  calibBuf.push({ smile:(bs.mouthSmileLeft+bs.mouthSmileRight)/2,
+    frown:(bs.mouthFrownLeft+bs.mouthFrownRight)/2,
+    browDown:(bs.browDownLeft+bs.browDownRight)/2,
+    browUp:bs.browInnerUp, jaw:bs.jawOpen,
+    pitchRatio:g.pitchRatio, roll:g.roll, yaw:g.yaw, w:g.w, cy:g.cy,
+    shY: poseData ? poseData.shY : null, headDrop: poseData ? poseData.headDrop : null });
+  const left = Math.max(0, 3 - (calibBuf.length*0.08)).toFixed(1);
+  calibText.textContent = 'Нейтральное лицо… ещё ' + left + ' с';
+  if (calibBuf.length >= 38){
+    const avg = k => { const v=calibBuf.map(o=>o[k]).filter(x=>x!==null); return v.length? v.reduce((a,b)=>a+b,0)/v.length : null; };
+    calib = { smile:avg('smile'), frown:avg('frown'), browDown:avg('browDown'), browUp:avg('browUp'),
+      jaw:avg('jaw'), pitchRatio:avg('pitchRatio'), roll:avg('roll'), yaw:avg('yaw'),
+      w:avg('w'), cy:avg('cy'), shY:avg('shY'), headDrop:avg('headDrop') };
+    calibrating = false;
+    calibVeil.style.display = 'none';
+    addLog('✅ Калибровка завершена — пороги настроены под вас');
+    speak('Готово! Я откалибровалась под ваше лицо и слежу за вами.');
+    lastAnySpeech = Date.now();
+    startAgeEstimation();
+  }
+}
+
+/* ============ Возраст и пол (face-api, один раз) ============ */
+async function startAgeEstimation(){
+  if (ageDone || typeof faceapi === 'undefined') return;
+  try {
+    if (!faDetReady){
+      await faceapi.nets.tinyFaceDetector.loadFromUri('./models');
+      await faceapi.nets.ageGenderNet.loadFromUri('./models');
+      faDetReady = true;
+    }
+    ageTimer = setInterval(async () => {
+      if (!running || ageDone){ clearInterval(ageTimer); return; }
+      try {
+        const det = await faceapi.detectSingleFace(video,
+          new faceapi.TinyFaceDetectorOptions({inputSize:224, scoreThreshold:0.4})).withAgeAndGender();
+        if (det){
+          ageSamples.push(det.age);
+          genderVotes[det.gender==='male'?'male':'female']++;
+          if (ageSamples.length >= 7){
+            ageDone = true; clearInterval(ageTimer);
+            const age = Math.round(ageSamples.reduce((a,b)=>a+b,0)/ageSamples.length);
+            const male = genderVotes.male >= genderVotes.female;
+            $('sAge').textContent = '~'+age;
+            fireEvent('ageGender','Кстати, вижу '+(male?'мужчину':'женщину')+', на вид примерно '+age+' лет.',
+              (male?'👨':'👩')+' Возраст на вид: ~'+age, true);
+          }
+        }
+      } catch(e){ console.warn(e); }
+    }, 900);
+  } catch(e){ console.warn('Возраст недоступен', e); }
+}
+
+/* ============ Лента настроения ============ */
+function drawTimeline(){
+  const cv = timelineCv, ctx = cv.getContext('2d');
+  const W = cv.width = cv.clientWidth * (window.devicePixelRatio||1);
+  const H = cv.height = 56 * (window.devicePixelRatio||1);
+  ctx.clearRect(0,0,W,H);
+  ctx.strokeStyle = 'rgba(139,152,165,.35)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0,H/2); ctx.lineTo(W,H/2); ctx.stroke();
+  if (moodBuf.length < 2) return;
+  const n = moodBuf.length, step = W/(239);
+  ctx.lineWidth = 2.5; ctx.lineJoin='round';
+  const grad = ctx.createLinearGradient(0,0,0,H);
+  grad.addColorStop(0,'#ffb937'); grad.addColorStop(.5,'#3ec9a7'); grad.addColorStop(1,'#5b8dd6');
+  ctx.strokeStyle = grad;
+  ctx.beginPath();
+  for (let i=0;i<n;i++){
+    const x = W - (n-1-i)*step;
+    const y = H/2 - moodBuf[i]*(H/2-4);
+    i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+  }
+  ctx.stroke();
+}
+
+/* ============ Поза тела ============ */
+let poseState = {shY:null, headDrop:null, flags:[]};
+function analyzePose(res, nowMs){
+  poseState.flags = [];
+  if (!res || !res.landmarks || !res.landmarks.length){ poseChip.innerHTML=''; return; }
+  const lm = res.landmarks[0];
+  const nose=lm[0], shL=lm[11], shR=lm[12], wrL=lm[15], wrR=lm[16];
+  const vis = p => (p.visibility===undefined || p.visibility>0.5);
+  if (!(vis(shL)&&vis(shR))){ poseChip.innerHTML=''; return; }
+  const shY=(shL.y+shR.y)/2;
+  const headDrop = shY - nose.y; // чем меньше, тем ниже голова к плечам
+  poseState.shY = shY; poseState.headDrop = headDrop;
+  const shoulderTilt = Math.atan2(shR.y-shL.y, shR.x-shL.x)*180/Math.PI;
+  const shoulderRoll = Math.abs(((shoulderTilt+360)%180)-0) > 90 ? Math.abs(((shoulderTilt+360)%180)-180) : Math.abs(((shoulderTilt+360)%180));
+
+  const chips=[];
+  // сутулость: голова просела к плечам относительно калибровки
+  if (calib && calib.headDrop !== null && headDrop < calib.headDrop*0.72){
+    postureBad = true; chips.push('🧍 сутулость');
+    fireEvent('slouch', pick(['Вы ссутулились! Выпрямите спину и расправьте плечи.',
+      'Спина! Сядьте ровно, плечи назад.']), '🧍 Сутулость: голова просела к плечам');
+  } else { postureBad = false; }
+  // перекос плеч
+  if (shoulderRoll > 9 && shoulderRoll < 80){
+    chips.push('↔️ перекос плеч');
+    fireEvent('shoulders','Плечи перекошены. Выровняйте их!','↔️ Перекос линии плеч');
+  }
+  // рука у лица
+  const near = w => vis(w) && Math.hypot(w.x-nose.x, w.y-nose.y) < 0.13;
+  if (near(wrL) || near(wrR)){
+    chips.push('🤔 рука у лица');
+    fireEvent('handFace', pick(['Рука у лица. Задумались?','Подпёрли голову рукой — устали?']), '🤔 Рука у лица');
+  }
+  // поднятая рука
+  const up = w => vis(w) && w.y < shY - 0.12;
+  if (up(wrL) || up(wrR)){
+    chips.push('✋ рука поднята');
+    fireEvent('handUp', pick(['Вижу поднятую руку! Приветствую!','Вы машете рукой? И вам привет!']), '✋ Поднята рука');
+  }
+  poseChip.innerHTML = chips.map(c=>'<span>'+c+'</span>').join('');
+  $('sPosture').textContent = postureBad ? 'плохо' : 'ок';
+}
+
+/* ============ Главный цикл ============ */
+function loop(){
+  if (!running) return;
+  rafId = requestAnimationFrame(loop);
+  if (video.readyState < 2) return;
+  const nowMs = performance.now();
+  if (video.currentTime === lastVideoTime) return;
+  lastVideoTime = video.currentTime;
+
+  // FPS
+  fpsFrames++;
+  if (nowMs - fpsStamp > 1000){ fps = fpsFrames; fpsFrames=0; fpsStamp=nowMs; $('sFps').textContent = fps; }
+
+  let res;
+  try { res = faceLandmarker.detectForVideo(video, nowMs); }
+  catch(e){ console.error(e); return; }
+
+  const dtMs = lastFrameAt ? (nowMs - lastFrameAt) : 33; lastFrameAt = nowMs;
+  framesTotal++;
+
+  // --- поза тела, каждые ~600 мс ---
+  if (poseLandmarker && nowMs - lastPoseTime > 600){
+    lastPoseTime = nowMs;
+    try { analyzePose(poseLandmarker.detectForVideo(video, nowMs+0.01), nowMs); } catch(e){}
+  }
+
+  const faces = res.faceLandmarks || [];
+
+  // --- сетка ---
+  octx.clearRect(0,0,overlay.width,overlay.height);
+  if (meshOn && faces.length){
+    octx.save();
+    if (facingUser){ octx.translate(overlay.width,0); octx.scale(-1,1); }
+    drawer.drawConnectors(faces[0], FaceLandmarker.FACE_LANDMARKS_TESSELATION, {color:'rgba(62,201,167,.25)', lineWidth:0.6});
+    drawer.drawConnectors(faces[0], FaceLandmarker.FACE_LANDMARKS_FACE_OVAL, {color:'rgba(255,185,55,.8)', lineWidth:1.6});
+    drawer.drawConnectors(faces[0], FaceLandmarker.FACE_LANDMARKS_LIPS, {color:'rgba(255,255,255,.7)', lineWidth:1.2});
+    octx.restore();
+  }
+
+  // --- несколько людей ---
+  if (faces.length >= 2 && lastCount < 2){
+    fireEvent('twoFaces','Вижу нескольких человек в кадре!','👥 В кадре несколько человек');
+  }
+  lastCount = faces.length;
+
+  if (!faces.length){
+    if (facePresent && nowMs - lastFaceSeen > 2500){
+      facePresent = false;
+      fireEvent('gone','Человек ушёл из кадра.','🚶 Человек ушёл из кадра');
+      poseChip.innerHTML='';
+    }
+    if (!facePresent) setUI(null,'👀','Лицо не видно');
+    return;
+  }
+  lastFaceSeen = nowMs;
+  if (!facePresent){
+    facePresent = true;
+    if (calib) fireEvent('appeared','С возвращением! Я вас вижу.','👋 Человек вернулся в кадр');
+  }
+
+  const lms = faces[0];
+  const bsRaw = toMap((res.faceBlendshapes && res.faceBlendshapes[0]) ? res.faceBlendshapes[0].categories : []);
+  const bs = smooth(bsRaw);
+  const g = faceGeom(lms);
+
+  if (calibrating){ feedCalibration(bs, g, poseState.shY!==null ? poseState : null); return; }
+  if (!calib){ startCalibration(); return; }
+
+  /* ---- производные величины ---- */
+  const smileRel = Math.max(0, (bs.mouthSmileLeft+bs.mouthSmileRight)/2 - calib.smile);
+  const frownRel = Math.max(0, (bs.mouthFrownLeft+bs.mouthFrownRight)/2 - calib.frown);
+  const browDownRel = Math.max(0, (bs.browDownLeft+bs.browDownRight)/2 - calib.browDown);
+  const browUpRel = Math.max(0, bs.browInnerUp - calib.browUp);
+  const cheekSq = (bs.cheekSquintLeft+bs.cheekSquintRight)/2;
+  const blink = (bs.eyeBlinkLeft+bs.eyeBlinkRight)/2;
+  const eyesClosed = blink > 0.52;
+  const jawRel = Math.max(0, bs.jawOpen - calib.jaw);
+  const sneer = (bs.noseSneerLeft+bs.noseSneerRight)/2;
+  const wide = (bs.eyeWideLeft+bs.eyeWideRight)/2;
+
+  /* ---- моргание и PERCLOS ---- */
+  if (eyesClosed && !blinkDown){ blinkDown = true; }
+  if (!eyesClosed && blinkDown){ blinkDown = false; blinkCount++; lastBlinkAt = nowMs; closedStreakMs = 0; }
+  if (eyesClosed) closedStreakMs += dtMs; else closedStreakMs = 0;
+
+  perclosBuf.push({t:nowMs, c:eyesClosed?1:0});
+  while (perclosBuf.length && nowMs - perclosBuf[0].t > 60000) perclosBuf.shift();
+  let perclos = 0;
+  if (perclosBuf.length > 30){
+    perclos = perclosBuf.reduce((a,o)=>a+o.c,0) / perclosBuf.length;
+    $('fatigueVal').textContent = Math.round(perclos*100)+'%';
+    $('fatigueBar').style.width = Math.min(100, perclos*100*2.5)+'%';
+    const lvl = perclos>0.28?3 : perclos>0.16?2 : perclos>0.09?1 : 0;
+    if (lvl > fatigueLevel){
+      fatigueLevel = lvl;
+      const txt = ['', 'Замечаю лёгкую усталость глаз.', 'Усталость нарастает. Возможно, стоит сделать паузу.',
+        'Сильная усталость! Настоятельно советую отдохнуть.'][lvl];
+      fireEvent('fatigueUp', txt, '🔋 Усталость: уровень '+lvl+' (PERCLOS '+Math.round(perclos*100)+'%)', lvl>=2);
+    }
+    if (lvl < fatigueLevel) fatigueLevel = lvl;
+  }
+
+  if (lastBlinkAt && nowMs - lastBlinkAt > 14000 && !eyesClosed){
+    fireEvent('dryEyes','Вы давно не моргали. Поморгайте, чтобы глаза не пересыхали!','👁 Долго без моргания');
+    lastBlinkAt = nowMs;
+  }
+
+  if (closedStreakMs > 1700){
+    setUI('warn','😴','Глаза закрыты');
+    fireEvent('drowsy', pick(['Ваши глаза закрыты. Вы засыпаете? Взбодритесь!','Не спать! Открывайте глаза!']),
+      '😴 Глаза закрыты — сонливость', true);
+    return;
+  }
+
+  /* ---- взгляд ---- */
+  const lookL = (bs.eyeLookOutLeft + bs.eyeLookInRight)/2;
+  const lookR = (bs.eyeLookOutRight + bs.eyeLookInLeft)/2;
+  const lookU = (bs.eyeLookUpLeft + bs.eyeLookUpRight)/2;
+  const lookD = (bs.eyeLookDownLeft + bs.eyeLookDownRight)/2;
+  const gazeOff = Math.max(lookL, lookR) > 0.62 || lookU > 0.7;
+  if (gazeOff) gazeAwayMs += dtMs; else gazeAwayMs = 0;
+  if (gazeAwayMs > 2200){
+    fireEvent('gazeAway', pick(['Ваш взгляд ушёл в сторону. О чём задумались?','Вы смотрите мимо экрана.']),
+      '👀 Взгляд в сторону');
+    gazeAwayMs = 0;
+  }
+
+  /* ---- голова ---- */
+  const rollRel = g.roll - calib.roll, yawRel = g.yaw - calib.yaw;
+  const pitchDown = (g.pitchRatio - calib.pitchRatio)*120;
+  if (Math.abs(rollRel) > 14)
+    fireEvent('tiltHead','Голова наклонена набок. Следите за осанкой!','↩️ Наклон головы '+Math.round(rollRel)+'°');
+  if (Math.abs(yawRel) > 24)
+    fireEvent('turned','Вы отвернулись от экрана.','👈 Поворот головы '+Math.round(yawRel)+'°');
+  if (pitchDown > 16)
+    fireEvent('headDown','Голова опущена вниз. Поднимите подбородок, берегите шею!','⬇️ Голова опущена');
+
+  /* ---- расстояние ---- */
+  if (g.w > 0.55) fireEvent('tooClose','Вы слишком близко к экрану. Отодвиньтесь, берегите зрение!','📏 Слишком близко');
+  else if (g.w < 0.12) fireEvent('tooFar','Вы далеко от камеры, подойдите ближе.','📏 Слишком далеко');
+
+  /* ---- внимание ---- */
+  const attentive = !gazeOff && Math.abs(yawRel) < 24 && !eyesClosed;
+  if (attentive) framesAttentive++;
+
+  /* ---- настроение / эмоции ---- */
+  valence = Math.max(-1, Math.min(1, smileRel*2.2 - frownRel*2.5 - browDownRel*1.2));
+  if (nowMs - lastMoodPush > 500){
+    lastMoodPush = nowMs;
+    moodBuf.push(valence); if (moodBuf.length > 240) moodBuf.shift();
+    drawTimeline();
+  }
+
+  if (smileRel > 0.25 && !wasSmiling){ smileCount++; wasSmiling = true; $('sSmiles').textContent = smileCount; }
+  if (smileRel < 0.12) wasSmiling = false;
+
+  /* ---- тренажёр улыбки ---- */
+  if (trainerOn){
+    if (nowMs < trainerRestUntil){ trainerBadge.style.display='none'; }
+    else {
+      trainerBadge.style.display='block';
+      if (smileRel > 0.25){
+        trainerHold += dtMs;
+        trainerBadge.textContent = '😁 Держите! Ещё ' + Math.max(0,(5 - trainerHold/1000)).toFixed(1) + ' с';
+        setUI('joy','😄','Тренажёр: улыбка идёт!');
+        if (trainerHold >= 5000){
+          trainerWins++; trainerHold = 0; trainerRestUntil = nowMs + 8000;
+          $('sTrainer').textContent = trainerWins;
+          fireEvent('trainerWin','Отлично! Улыбка засчитана! Счёт: '+trainerWins+'.','🏆 Тренажёр: +1 (всего '+trainerWins+')', true);
+        }
+      } else {
+        if (trainerHold > 1200) fireEvent('trainerFail','Улыбка сорвалась! Ещё раз!','😅 Тренажёр: срыв');
+        trainerHold = 0;
+        trainerBadge.textContent = '😁 Улыбнитесь и держите 5 секунд!';
+      }
+      return;
+    }
+  }
+
+  /* ---- классификация выражения ---- */
+  if (jawRel > 0.5 && wide < 0.25){ yawnMs += dtMs; } else { yawnMs = 0; }
+  if (yawnMs > 900){
+    setUI('warn','🥱','Зевота');
+    fireEvent('yawn', pick(['Вы зеваете! Может, пора размяться?','Какой зевок! Организм просит отдыха.']),'🥱 Зевота');
+  } else if (bs.tongueOut > 0.5){
+    setUI('surp','😛','Показали язык!');
+    fireEvent('tongue', pick(['Эй, я всё вижу — вы показали язык!','Язык спрячьте, хулиган!']),'😛 Показан язык');
+  } else if (bs.cheekPuff > 0.55){
+    setUI('surp','🐡','Надуты щёки');
+    fireEvent('cheeks','Надули щёки, как рыба фугу!','🐡 Надуты щёки');
+  } else if (bs.mouthPucker > 0.72 && jawRel < 0.2 && smileRel < 0.15){
+    setUI('joy','😘','Поцелуй!');
+    fireEvent('kiss','Это воздушный поцелуй? Принято!','😘 Воздушный поцелуй');
+  } else if (smileRel > 0.25){
+    const sincere = cheekSq > 0.28;
+    setUI('joy','😄', sincere ? 'Искренняя улыбка!' : 'Вы улыбаетесь!');
+    if (sincere)
+      fireEvent('joySincere', pick(['Вот это искренняя улыбка, от самых глаз! Великолепно!','Настоящая улыбка Дюшена! Так держать!']),'😄 Искренняя улыбка (с глазами)');
+    else
+      fireEvent('joyPolite', pick(['Вы улыбаетесь! Отлично!','Вижу улыбку — а теперь улыбнитесь и глазами!']),'🙂 Вежливая улыбка');
+  } else if (browUpRel > 0.3 && (jawRel > 0.25 || wide > 0.3)){
+    setUI('surp','😲','Удивление!');
+    fireEvent('surprised','Вы выглядите удивлённым! Что случилось?','😲 Удивление');
+  } else if (browDownRel > 0.3 && smileRel < 0.1){
+    setUI('angry','😠','Напряжение / злость');
+    fireEvent('angry', pick(['Брови нахмурены. Сделайте глубокий вдох и выдох.','Вы сердитесь? Выдохните, расслабьте лоб.']),'😠 Нахмуренные брови');
+  } else if (sneer > 0.4){
+    setUI('warn','🤢','Недовольство');
+    fireEvent('disgusted','Вам что-то не нравится?','🤢 Гримаса недовольства');
+  } else if (frownRel > 0.22 || (browUpRel > 0.35 && smileRel < 0.08)){
+    setUI('sad','😔','Грусть на лице');
+    fireEvent('sad', pick(['Вы грустные. Улыбнитесь!','Уголки губ опустились. Подарите себе улыбку!']),'😔 Грусть');
+  } else {
+    setUI('calm','🙂','Спокойное выражение');
+  }
+}
+
+/* ============ Статистика ============ */
+function updateStats(){
+  if (!running) return;
+  const now = Date.now();
+  $('sTime').textContent = fmtTime(now - sessionStart);
+  const mins = (now - sessionStart)/60000;
+  $('sBlinks').textContent = mins > 0.3 ? Math.round(blinkCount/mins) : '—';
+  $('sAttention').textContent = framesTotal > 40 ? Math.round(framesAttentive/framesTotal*100)+'%' : '—';
+  if (now - sessionStart > 20*60000 && now - lastBreakReminder > 20*60000){
+    lastBreakReminder = now;
+    fireEvent('breakTime','Вы за экраном уже двадцать минут. Правило двадцать-двадцать-двадцать: посмотрите вдаль на двадцать секунд.','⏰ Перерыв для глаз (20-20-20)', true);
+  }
+}
+
+/* ============ Отчёт ============ */
+function downloadReport(){
+  const now = Date.now();
+  const mins = sessionStart ? (now-sessionStart)/60000 : 0;
+  const perclos = perclosBuf.length>30 ? Math.round(perclosBuf.reduce((a,o)=>a+o.c,0)/perclosBuf.length*100) : null;
+  const lines = [
+    '=== ОТЧЁТ «ЗЕРКАЛО 2.0» ===',
+    'Дата: ' + new Date().toLocaleString('ru-RU'),
+    'Длительность: ' + (sessionStart ? fmtTime(now-sessionStart) : '0:00'),
+    'Улыбок: ' + smileCount,
+    'Морганий в минуту: ' + (mins>0.3 ? Math.round(blinkCount/mins) : '—'),
+    'PERCLOS (усталость): ' + (perclos===null?'—':perclos+'%') + '  · уровень ' + fatigueLevel + ' из 3',
+    'Внимание к экрану: ' + (framesTotal>40 ? Math.round(framesAttentive/framesTotal*100)+'%' : '—'),
+    'Осанка: ' + (postureBad ? 'были замечания' : 'в порядке'),
+    'Тренажёр улыбки, успехов: ' + trainerWins,
+    '', '--- ЖУРНАЛ СОБЫТИЙ ---', ...logEntries
+  ];
+  const blob = new Blob([lines.join('\n')], {type:'text/plain;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = 'otchet-zerkalo2.txt'; a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+/* ============ Кнопки ============ */
+$('tVoice').onclick = function(){
+  voiceOn = !voiceOn;
+  this.textContent = voiceOn ? '🔊 Голос' : '🔇 Голос';
+  this.classList.toggle('on', voiceOn);
+  if (!voiceOn) speechSynthesis.cancel();
+};
+$('tMesh').onclick = function(){
+  meshOn = !meshOn; this.classList.toggle('on', meshOn);
+  addLog(meshOn ? '🕸 Сетка лица включена' : '🕸 Сетка лица выключена');
+};
+$('tTrainer').onclick = function(){
+  trainerOn = !trainerOn; this.classList.toggle('on', trainerOn);
+  trainerHold = 0; trainerRestUntil = 0;
+  trainerBadge.style.display = trainerOn ? 'block' : 'none';
+  trainerBadge.textContent = '😁 Улыбнитесь и держите 5 секунд!';
+  if (trainerOn && running) speak('Тренажёр улыбки включён! Улыбнитесь и удержите улыбку пять секунд.');
+  addLog(trainerOn ? '🏋️ Тренажёр улыбки включён' : '🏋️ Тренажёр выключен');
+};
+$('tCam').onclick = async function(){
+  facingUser = !facingUser;
+  addLog('🔄 Камера: ' + (facingUser?'передняя':'задняя'));
+  if (running){ stopCamera(); try{ await startCamera(); }catch(e){ console.error(e); } }
+};
+$('tReport').onclick = downloadReport;
+
+btn.onclick = async () => {
+  if (running){
+    running = false;
+    cancelAnimationFrame(rafId); clearInterval(statTimer); clearInterval(ageTimer);
+    stopCamera(); speechSynthesis.cancel();
+    btn.textContent = 'Начать'; btn.classList.remove('stop');
+    setUI(null,'🙂','Остановлено'); addLog('⏹ Сессия остановлена');
+    poseChip.innerHTML='';
+    return;
+  }
+  try{
+    btn.disabled = true;
+    speak('Запускаюсь.');
+    if (!faceLandmarker) await loadEngines();
+    await startCamera();
+    running = true;
+    sessionStart = Date.now(); lastBreakReminder = sessionStart; lastBlinkAt = performance.now();
+    smileCount=0; blinkCount=0; framesTotal=0; framesAttentive=0; fatigueLevel=0;
+    perclosBuf=[]; moodBuf=[]; bsSm={}; logEntries=[]; trainerWins=0;
+    ageDone=false; ageSamples=[]; genderVotes={male:0,female:0};
+    calib=null; calibrating=false; facePresent=false; lastVideoTime=-1;
+    btn.textContent='Остановить'; btn.classList.add('stop');
+    setUI('calm','🙂','Ищу лицо…'); hint.textContent='';
+    addLog('▶️ Сессия началась');
+    statTimer = setInterval(updateStats, 1000);
+    loop();
+  } catch(err){
+    console.error(err);
+    label.textContent = 'Не удалось получить доступ к камере';
+    hint.textContent = 'Откройте по https-ссылке в Safari или Chrome и разрешите камеру';
+  } finally { btn.disabled = false; }
+};
+
+window.addEventListener('error', e => { loading.textContent = 'Ошибка: ' + (e.message||''); });
+</script>
+</body>
+</html>
