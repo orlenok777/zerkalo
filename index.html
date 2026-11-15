@@ -120,7 +120,7 @@
 <body>
 
 <h1>🪞 Зеркало 2.0</h1>
-<p class="sub">478 точек лица · 52 мышцы · поза тела · взгляд · усталость · голос<br>Версия 2.0 · 15.11.2026</p>
+<p class="sub">478 точек лица · 52 мышцы · поза · предметы в руках · вода · активность · голос<br>Версия 2.1 · 15.11.2026 13:15 · пред. 2.0 · 15.11.2026</p>
 
 <div class="stage" id="stage">
   <video id="video" class="mirrored" autoplay muted playsinline></video>
@@ -159,6 +159,8 @@
   <div class="chip">🧍 Осанка<b id="sPosture">—</b></div>
   <div class="chip">🏆 Тренажёр<b id="sTrainer">0</b></div>
   <div class="chip">🎂 Возраст<b id="sAge">—</b></div>
+  <div class="chip">💧 Вода<b id="sWater">0 мл</b></div>
+  <div class="chip">🏃 Активность<b id="sMove">—</b></div>
 </div>
 
 <div class="controls">
@@ -179,7 +181,7 @@
 
 <script src="vendor/face-api.min.js"></script>
 <script type="module">
-import { FilesetResolver, FaceLandmarker, PoseLandmarker, DrawingUtils } from './vendor/vision_bundle.js';
+import { FilesetResolver, FaceLandmarker, PoseLandmarker, ObjectDetector, DrawingUtils } from './vendor/vision_bundle.js';
 
 /* ============ DOM ============ */
 const $ = id => document.getElementById(id);
@@ -222,8 +224,9 @@ const COOLDOWN = {
   joySincere:25, joyPolite:25, sad:25, angry:25, surprised:18, disgusted:25, kiss:20,
   tongue:15, cheeks:20, yawn:30, drowsy:20, dryEyes:50, gazeAway:20, turned:18,
   tiltHead:25, headDown:30, tooClose:18, tooFar:25, appeared:8, gone:8, twoFaces:25,
-  slouch:40, shoulders:40, handFace:35, handUp:15, fatigueUp:45, breakTime:60,
-  trainerWin:3, trainerFail:10, ageGender:9999
+  slouch:20, shoulders:30, handFace:35, handUp:15, fatigueUp:45, breakTime:60,
+  trainerWin:3, trainerFail:10, ageGender:9999,
+  drink:5, eat:90, phone:60, sedentary:480
 };
 function fireEvent(type, phrase, logText, force){
   const now = Date.now();
@@ -298,6 +301,20 @@ async function loadEngines(){
         runningMode:'VIDEO', numPoses:1
       });
     } catch(e2){ console.warn('Поза недоступна', e2); poseLandmarker = null; }
+  }
+  loading.textContent = 'Подключаю детектор предметов…';
+  try {
+    objectDetector = await ObjectDetector.createFromOptions(fileset, {
+      baseOptions:{ modelAssetPath:'./models/efficientdet_lite0.tflite', delegate:'GPU' },
+      runningMode:'VIDEO', scoreThreshold:0.4, maxResults:5
+    });
+  } catch(e){
+    try {
+      objectDetector = await ObjectDetector.createFromOptions(fileset, {
+        baseOptions:{ modelAssetPath:'./models/efficientdet_lite0.tflite', delegate:'CPU' },
+        runningMode:'VIDEO', scoreThreshold:0.4, maxResults:5
+      });
+    } catch(e2){ console.warn('Детектор предметов недоступен', e2); objectDetector = null; }
   }
   loading.textContent = '';
 }
@@ -427,17 +444,84 @@ function drawTimeline(){
 }
 
 /* ============ Поза тела ============ */
+let objectDetector=null, lastObjTime=0, lastFaceC=null;
+let waterMl=0, drinkCount=0, drinkCandidateMs=0, lastDrinkAt=0, phoneMs=0;
+let moveBuf=[], lastPosePts=null;
+let chipSets={pose:[],obj:[]};
+function renderChips(){ poseChip.innerHTML = [...chipSets.pose, ...chipSets.obj].map(c=>'<span>'+c+'</span>').join(''); }
+
+/* ============ Детектор предметов ============ */
+const RU_OBJ = {cup:'стакан/кружка', bottle:'бутылка', 'wine glass':'бокал', 'cell phone':'телефон',
+  banana:'банан', apple:'яблоко', orange:'апельсин', sandwich:'бутерброд', donut:'пончик',
+  cake:'торт', pizza:'пицца', carrot:'морковь', book:'книга', 'teddy bear':'игрушка', laptop:'ноутбук'};
+const FOOD = ['banana','apple','orange','sandwich','donut','cake','pizza','carrot'];
+function handleObjects(od, nowMs){
+  const dets = (od && od.detections) ? od.detections : [];
+  const chips = [];
+  let drinkSeen=false, phoneSeen=false;
+  const W = video.videoWidth || 1, H = video.videoHeight || 1;
+  for (const d of dets){
+    const c = d.categories && d.categories[0]; if (!c || c.score < 0.4) continue;
+    const name = c.categoryName;
+    if (!(name in RU_OBJ)) continue;
+    chips.push('🔎 ' + RU_OBJ[name]);
+    const bb = d.boundingBox;
+    const cx=(bb.originX+bb.width/2)/W, cy=(bb.originY+bb.height/2)/H;
+    const nearFace = lastFaceC ? Math.hypot(cx-lastFaceC.x, cy-lastFaceC.y) < 0.38 : cy < 0.6;
+    if ((name==='cup'||name==='bottle'||name==='wine glass') && nearFace) drinkSeen = true;
+    if (name==='cell phone') phoneSeen = true;
+    if (FOOD.includes(name))
+      fireEvent('eat','Приятного аппетита! Вижу у вас '+RU_OBJ[name]+'.','🍽 Еда в кадре: '+RU_OBJ[name]);
+  }
+  if (drinkSeen){
+    drinkCandidateMs += 900;
+    if (drinkCandidateMs >= 1800 && nowMs - lastDrinkAt > 90000){
+      lastDrinkAt = nowMs; drinkCandidateMs = 0;
+      waterMl += 150; drinkCount++;
+      $('sWater').textContent = waterMl + ' мл';
+      fireEvent('drink','Молодец! По всей видимости, вы попили воды. Записываю примерно сто пятьдесят миллилитров.',
+        '💧 Питьё: +150 мл (всего '+waterMl+' мл)', true);
+    }
+  } else { drinkCandidateMs = Math.max(0, drinkCandidateMs - 450); }
+  if (phoneSeen){
+    phoneMs += 900;
+    if (phoneMs > 2700){ phoneMs = 0;
+      fireEvent('phone','Вы в телефоне. Не забывайте отдыхать от маленького экрана!','📱 Телефон в руках');
+    }
+  } else phoneMs = 0;
+  chipSets.obj = chips.slice(0,3);
+  renderChips();
+}
+
 let poseState = {shY:null, headDrop:null, flags:[]};
 function analyzePose(res, nowMs){
   poseState.flags = [];
-  if (!res || !res.landmarks || !res.landmarks.length){ poseChip.innerHTML=''; return; }
+  if (!res || !res.landmarks || !res.landmarks.length){ chipSets.pose=[]; renderChips(); return; }
   const lm = res.landmarks[0];
   const nose=lm[0], shL=lm[11], shR=lm[12], wrL=lm[15], wrR=lm[16];
   const vis = p => (p.visibility===undefined || p.visibility>0.5);
-  if (!(vis(shL)&&vis(shR))){ poseChip.innerHTML=''; return; }
+  if (!(vis(shL)&&vis(shR))){ chipSets.pose=[]; renderChips(); return; }
   const shY=(shL.y+shR.y)/2;
   const headDrop = shY - nose.y; // чем меньше, тем ниже голова к плечам
   poseState.shY = shY; poseState.headDrop = headDrop;
+
+  // --- активность и неподвижность ---
+  const ptsNow = [lm[0], lm[11], lm[12], lm[15], lm[16]].map(p=>({x:p.x,y:p.y}));
+  if (lastPosePts){
+    let mv=0; for (let i=0;i<ptsNow.length;i++) mv += Math.hypot(ptsNow[i].x-lastPosePts[i].x, ptsNow[i].y-lastPosePts[i].y);
+    mv /= ptsNow.length;
+    moveBuf.push({t:nowMs, m:mv});
+    while (moveBuf.length && nowMs - moveBuf[0].t > 10*60000) moveBuf.shift();
+    if (moveBuf.length > 40){
+      const moved = moveBuf.filter(o=>o.m>0.012).length / moveBuf.length;
+      $('sMove').textContent = moved > 0.25 ? 'высокая' : moved > 0.08 ? 'средняя' : 'низкая';
+      if ((nowMs - moveBuf[0].t) > 8*60000 && moved < 0.08){
+        fireEvent('sedentary','Вы уже долго сидите почти без движения. Встаньте, потянитесь и немного подвигайтесь!',
+          '🏃 Неподвижность более 8 минут — пора размяться', true);
+      }
+    }
+  }
+  lastPosePts = ptsNow;
   const shoulderTilt = Math.atan2(shR.y-shL.y, shR.x-shL.x)*180/Math.PI;
   const shoulderRoll = Math.abs(((shoulderTilt+360)%180)-0) > 90 ? Math.abs(((shoulderTilt+360)%180)-180) : Math.abs(((shoulderTilt+360)%180));
 
@@ -465,7 +549,7 @@ function analyzePose(res, nowMs){
     chips.push('✋ рука поднята');
     fireEvent('handUp', pick(['Вижу поднятую руку! Приветствую!','Вы машете рукой? И вам привет!']), '✋ Поднята рука');
   }
-  poseChip.innerHTML = chips.map(c=>'<span>'+c+'</span>').join('');
+  chipSets.pose = chips; renderChips();
   $('sPosture').textContent = postureBad ? 'плохо' : 'ок';
 }
 
@@ -493,6 +577,12 @@ function loop(){
   if (poseLandmarker && nowMs - lastPoseTime > 600){
     lastPoseTime = nowMs;
     try { analyzePose(poseLandmarker.detectForVideo(video, nowMs+0.01), nowMs); } catch(e){}
+  }
+
+  // --- предметы в руках, каждые ~900 мс ---
+  if (objectDetector && nowMs - lastObjTime > 900){
+    lastObjTime = nowMs;
+    try { handleObjects(objectDetector.detectForVideo(video, nowMs+0.02), nowMs); } catch(e){}
   }
 
   const faces = res.faceLandmarks || [];
@@ -533,6 +623,7 @@ function loop(){
   const bsRaw = toMap((res.faceBlendshapes && res.faceBlendshapes[0]) ? res.faceBlendshapes[0].categories : []);
   const bs = smooth(bsRaw);
   const g = faceGeom(lms);
+  lastFaceC = {x:g.cx, y:g.cy};
 
   if (calibrating){ feedCalibration(bs, g, poseState.shY!==null ? poseState : null); return; }
   if (!calib){ startCalibration(); return; }
@@ -714,6 +805,8 @@ function downloadReport(){
     'PERCLOS (усталость): ' + (perclos===null?'—':perclos+'%') + '  · уровень ' + fatigueLevel + ' из 3',
     'Внимание к экрану: ' + (framesTotal>40 ? Math.round(framesAttentive/framesTotal*100)+'%' : '—'),
     'Осанка: ' + (postureBad ? 'были замечания' : 'в порядке'),
+    'Выпито воды (оценка): ' + waterMl + ' мл (' + drinkCount + ' раз)',
+    'Активность за последние 10 минут: ' + document.getElementById('sMove').textContent,
     'Тренажёр улыбки, успехов: ' + trainerWins,
     '', '--- ЖУРНАЛ СОБЫТИЙ ---', ...logEntries
   ];
@@ -769,6 +862,9 @@ btn.onclick = async () => {
     smileCount=0; blinkCount=0; framesTotal=0; framesAttentive=0; fatigueLevel=0;
     perclosBuf=[]; moodBuf=[]; bsSm={}; logEntries=[]; trainerWins=0;
     ageDone=false; ageSamples=[]; genderVotes={male:0,female:0};
+    waterMl=0; drinkCount=0; drinkCandidateMs=0; lastDrinkAt=0; phoneMs=0;
+    moveBuf=[]; lastPosePts=null; chipSets={pose:[],obj:[]};
+    $('sWater').textContent='0 мл'; $('sMove').textContent='—';
     calib=null; calibrating=false; facePresent=false; lastVideoTime=-1;
     btn.textContent='Остановить'; btn.classList.add('stop');
     setUI('calm','🙂','Ищу лицо…'); hint.textContent='';
